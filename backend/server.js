@@ -7,7 +7,8 @@ import { connectDB } from './db.js';
 connectDB();
 import Message from './models/message.js';
 
-const onlineUsers = new Set();
+// track online users per room
+const roomUsers = new Map(); // {roomId: Set(userNames)}
 
 const app = express();
 
@@ -19,51 +20,93 @@ const io = new Server(server,{
   },
 });
 
-const ROOM = "group";
+// const ROOM = "group";
 
 io.on('connection', (socket) => {
   console.log('a user connected', socket.id);
 
-  socket.on('joinRoom', async(userName) => {
-    socket.userName = userName;
-    onlineUsers.add(userName);
+  // Modified : now accepts both userName and roomId
+  socket.on('joinRoom', async( {userName, roomId} ) => {
+     console.log('joinRoom received:', { userName, roomId });
 
-    await socket.join(ROOM);
-    const messages = await Message.find({ room: ROOM }).sort({ createdAt: 1 });
+    socket.userName = userName;
+    socket.roomId = roomId; // Store room ID in socket
+    // onlineUsers.add(userName);
+
+    if(!roomUsers.has(roomId)) {
+      roomUsers.set(roomId, new Set()); 
+    }
+
+    // add user to this room's user set
+    roomUsers.get(roomId).add(userName);
+
+    
+   // join the specific room
+    await socket.join(roomId);
+
+    //get the previous message for this room only
+    const messages = await Message.find({ room: roomId }).sort({ createdAt: 1 });
     socket.emit("previousMessages", messages);
 
     // mark unseen messages as delivered
     await Message.updateMany(
-      { room: ROOM, status: "sent", sender: { $ne: userName } },
+      { room: roomId, status: "sent", sender: { $ne: userName } },
       { status: "delivered" }
     );
        socket.emit("refreshStatuses");
+
+       // notify others in this room
+        socket.to(roomId).emit('roomNotice', userName);
+
+        console.log(`${userName} joined room:  ${roomId}`);
+        console.log(`Room ${roomId} now has ${roomUsers.get(roomId).size} users`);
         });
         
   socket.on("disconnect", () => {
-    if (socket.userName) {
-      onlineUsers.delete(socket.userName);
+    if (socket.userName && socket.roomId) {
+      const users = roomUsers.get(socket.roomId);
+      if(users){
+        users.delete(socket.userName);
+
+        if(users.size === 0){
+          roomUsers.delete(socket.roomId);
+          console.log(`Room ${socket.roomId} is now empty and removed.`);
+        } else{
+          console.log(`Room ${socket.roomId} now has ${users.size} users`);
+        }
+      }
+    
+      socket.to(socket.roomId).emit('roomNotice', socket.userName);
+      console.log(`${socket.userName} left room: ${socket.roomId}`);
     }
-    socket.to(ROOM).emit('roomNotice', socket.userName);
   });
 
   socket.on('chatMessage', async(msg) => {
+    const roomId = socket.roomId;
+
+      console.log('Message received:', msg);
+      console.log('Saving to room:', roomId);
+
     await Message.create({
     messageId: msg.id,
     sender: msg.sender,
     text: msg.text,
-    room: ROOM,
+    room: roomId,
     deleted: false,
     status: "sent",
     });
-      socket.to(ROOM).emit('chatMessage', msg);
+      socket.to(roomId).emit('chatMessage', msg);
       // if at least one other user is online, mark delivered
-      if (onlineUsers.size > 1) {
+      const roomUserCount = roomUsers.get(roomId)?.size || 0;
+      console.log(`Room ${roomId} has ${roomUserCount} users online`);
+
+      if (roomUserCount > 1) {
       await Message.findOneAndUpdate(
       { messageId: msg.id },
       { status: "delivered" }
     );
     socket.emit("messageDelivered", msg.id);
+    console.log(`Message ${msg.id} marked as delivered`);
   }
 });
   
@@ -72,20 +115,21 @@ io.on('connection', (socket) => {
     { messageId },
     { status: "seen" }
     );
-        io.to(ROOM).emit("messageSeenUpdate", messageId);
+        io.to(socket.roomId).emit("messageSeenUpdate", messageId);
       });
         socket.on('typing', (userName) => {
-        socket.to(ROOM).emit('typing', userName);
+        socket.to(socket.roomId).emit('typing', userName);
      });
         socket.on('stopTyping', (userName) => {
-        socket.to(ROOM).emit('stopTyping', userName);
+        socket.to(socket.roomId).emit('stopTyping', userName);
      });
         socket.on("deleteMessage", async (messageId) => {
-        await Message.findOneAndUpdate(
+        const updated = await Message.findOneAndUpdate(
          { messageId },
-         { deleted: true }
+         { deleted: true },
+         { new: true }
       );
-        io.to(ROOM).emit("messageDeleted", messageId);
+        io.to(socket.roomId).emit("messageDeleted", messageId);
         });
         socket.on("editMessage", async ({ messageId, newText }) => {
         const updated = await Message.findOneAndUpdate(
@@ -93,7 +137,7 @@ io.on('connection', (socket) => {
         { text: newText, edited: true },
         { new: true }
       );
-        io.to(ROOM).emit("messageEdited", {
+        io.to(socket.roomId).emit("messageEdited", {
         messageId,
         newText: updated.text,
         edited: true,
@@ -101,6 +145,6 @@ io.on('connection', (socket) => {
       });
          });
 
-server.listen(4600, () => {
+ server.listen(4600, () => {
   console.log('server running at http://localhost:4600');
 });

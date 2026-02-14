@@ -1,13 +1,14 @@
-import { useRef, useState } from 'react';
-import NamePopup from './components/NamePopup';
+import { useRef, useState, useEffect} from 'react';
+import RoomSelector from './components/RoomSelector';
 import ChatHeader from './components/ChatHeader';
 import MessageList from './components/MessageList';
 import ChatInput from './components/ChatInput';
-import { useSocket } from './hooks/useSocket';
+//import { useSocket } from './hooks/useSocket';
 import { useTypingIndicator } from './hooks/useTypingIndicator';
 import { useMessageSeen } from './hooks/useMessageSeen';
 import { useAutoScroll } from './hooks/useAutoScroll';
 import { useClickOutside } from './hooks/useClickOutside';
+import { connectWS } from './ws';
 
 export default function App() {
   const socket = useRef(null);
@@ -15,25 +16,127 @@ export default function App() {
   const menuRef = useRef(null);
 
   const [userName, setUserName] = useState('');
-  const [showNamePopup, setShowNamePopup] = useState(true);
+  const [roomId, setRoomId] = useState('');
+  const [showRoomSelector, setShowRoomSelector] = useState(true);
   const [typers, setTypers] = useState([]);
   const [deletedForMe, setDeletedForMe] = useState(new Set());
   const [messages, setMessages] = useState([]);
   const [text, setText] = useState('');
   const [openMenuId, setOpenMenuId] = useState(null);
 
+  // Initialize socket connection
+useEffect(() => {
+  socket.current = connectWS();
+
+  socket.current.on('connect', () => {
+    console.log('Connected to server');
+  });
+
+  socket.current.on('roomNotice', (userName) => {
+    console.log(`${userName} joined/left the group!`);
+  });
+
+  socket.current.on("chatMessage", (msg) => {
+    setMessages((prev) => [
+      ...prev,
+      {
+        id: msg.id,
+        sender: msg.sender,
+        text: msg.text,
+        ts: msg.ts,
+        status: "delivered",
+      },
+    ]);
+  });
+
+  socket.current.on("previousMessages", (msgs) => {
+    setMessages(msgs.map(m => ({
+      id: m.messageId,
+      sender: m.sender,
+      text: m.text,
+      ts: new Date(m.createdAt).getTime(),
+      deleted: m.deleted,
+      status: m.status,
+      edited: m.edited,
+    })));
+  });
+
+  socket.current.on('typing', (userName) => {
+    setTypers((prev) => {
+      const isExist = prev.find((typer) => typer === userName);
+      if (!isExist) {
+        return [...prev, userName];
+      }
+      return prev;
+    });
+  });
+
+  socket.current.on('stopTyping', (userName) => {
+    setTypers((prev) => prev.filter((typer) => typer !== userName));
+  });
+
+  socket.current.on("messageDelivered", (messageId) => {
+    setMessages((prev) =>
+      prev.map((m) =>
+        m.id === messageId ? { ...m, status: "delivered" } : m
+      )
+    );
+  });
+
+  socket.current.on("messageSeenUpdate", (messageId) => {
+    setMessages((prev) => prev.map((m) =>
+      m.id === messageId ? { ...m, status: "seen" } : m
+    )
+    );
+  });
+
+  socket.current.on("messageDeleted", (messageId) => {
+    setMessages((prev) =>
+      prev.map((m) =>
+        m.id === messageId
+          ? { ...m, deleted: true }
+          : m
+      )
+    );
+  });
+
+  socket.current.on("messageEdited", ({ messageId, newText, edited }) => {
+    setMessages((prev) =>
+      prev.map((m) =>
+        m.id === messageId
+          ? { ...m, text: newText, edited }
+          : m
+      )
+    );
+  });
+
+  return () => {
+    socket.current.off('connect');
+    socket.current.off('roomNotice');
+    socket.current.off('chatMessage');
+    socket.current.off('typing');
+    socket.current.off('stopTyping');
+    socket.current.off('previousMessages');
+    socket.current.off('messageDelivered');
+    socket.current.off('messageSeenUpdate');
+    socket.current.off('messageDeleted');
+    socket.current.off('messageEdited');
+  };
+}, []);
+
   // Custom hooks
-  useSocket(socket, userName, setMessages, setTypers);
+  //useSocket(socket, userName, setMessages, setTypers);
   useTypingIndicator(socket, text, userName);
   useMessageSeen(socket, messages, userName);
   useAutoScroll(messagesEndRef, messages);
   useClickOutside(menuRef, setOpenMenuId);
 
-  // Handlers
-  function handleNameSubmit(trimmedName) {
-    socket.current.emit('joinRoom', trimmedName);
-    setUserName(trimmedName);
-    setShowNamePopup(false);
+  // Handlers for joining room
+  function handleJoinRoom(name, room) {
+    socket.current.emit('joinRoom', {userName: name, roomId: room});
+    setUserName(name);
+    setRoomId(room);
+    setShowRoomSelector(false);
   }
 
   function sendMessage() {
@@ -77,12 +180,12 @@ export default function App() {
   return (
     <div className="min-h-screen flex items-center justify-center bg-zinc-100 p-4 font-inter">
       {/* ENTER YOUR NAME TO START CHATTING */}
-      {showNamePopup && <NamePopup onSubmit={handleNameSubmit} />}
+      {showRoomSelector && <RoomSelector onJoinRoom={handleJoinRoom} />}
 
       {/* CHAT WINDOW */}
-      {!showNamePopup && (
+      {!showRoomSelector && (
         <div className="w-full max-w-2xl h-[90vh] bg-white rounded-xl shadow-md flex flex-col overflow-hidden">
-          <ChatHeader userName={userName} typers={typers} />
+          <ChatHeader userName={userName} typers={typers} roomId={roomId} />
           
           <MessageList
             messages={messages}
