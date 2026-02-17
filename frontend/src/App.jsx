@@ -3,12 +3,12 @@ import RoomSelector from './components/RoomSelector';
 import ChatHeader from './components/ChatHeader';
 import MessageList from './components/MessageList';
 import ChatInput from './components/ChatInput';
-//import { useSocket } from './hooks/useSocket';
 import { useTypingIndicator } from './hooks/useTypingIndicator';
 import { useMessageSeen } from './hooks/useMessageSeen';
 import { useAutoScroll } from './hooks/useAutoScroll';
 import { useClickOutside } from './hooks/useClickOutside';
 import { connectWS } from './ws';
+import SummaryModal from './components/SummaryModal';
 
 export default function App() {
   const socket = useRef(null);
@@ -23,9 +23,12 @@ export default function App() {
   const [messages, setMessages] = useState([]);
   const [text, setText] = useState('');
   const [openMenuId, setOpenMenuId] = useState(null);
-
+  const [showSummary, setShowSummary] = useState(false);
+  const [summary, setSummary] = useState('');
+  const [summaryLoading, setSummaryLoading] = useState(false);
+  
   // Initialize socket connection
-useEffect(() => {
+  useEffect(() => {
   socket.current = connectWS();
 
   socket.current.on('connect', () => {
@@ -110,6 +113,18 @@ useEffect(() => {
     );
   });
 
+  socket.current.on('summaryResult', ({ summary }) => {
+  console.log('Summary received:', summary);
+  setSummary(summary);
+  setSummaryLoading(false);
+ });
+
+  socket.current.on('summaryError', ({ error }) => {
+  console.error('Summary error:', error);
+  setSummary(`Error: ${error}`);
+  setSummaryLoading(false);
+ });
+
   return () => {
     socket.current.off('connect');
     socket.current.off('roomNotice');
@@ -121,6 +136,8 @@ useEffect(() => {
     socket.current.off('messageSeenUpdate');
     socket.current.off('messageDeleted');
     socket.current.off('messageEdited');
+    socket.current.off('summaryResult');
+    socket.current.off('summaryError');
   };
 }, []);
 
@@ -170,12 +187,23 @@ useEffect(() => {
           : m
       )
     );
-
     socket.current.emit("editMessage", {
-      messageId,
-      newText: newText,
-    });
-  }
+    messageId,
+    newText: newText,
+   });
+ }
+
+
+    function handleRequestSummary() {
+    console.log('Requesting summary for room:', roomId);
+    setShowSummary(true);
+    setSummaryLoading(true);
+    setSummary('');
+    socket.current.emit('requestSummary', { 
+    roomId, 
+    messageCount: 50 
+  });
+}
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-zinc-100 p-4 font-inter">
@@ -185,7 +213,12 @@ useEffect(() => {
       {/* CHAT WINDOW */}
       {!showRoomSelector && (
         <div className="w-full max-w-2xl h-[90vh] bg-white rounded-xl shadow-md flex flex-col overflow-hidden">
-          <ChatHeader userName={userName} typers={typers} roomId={roomId} />
+          <ChatHeader 
+          userName={userName} 
+          typers={typers} 
+          roomId={roomId} 
+          onRequestSummary={handleRequestSummary}
+          />
           
           <MessageList
             messages={messages}
@@ -206,6 +239,13 @@ useEffect(() => {
             onSend={sendMessage}
           />
         </div>
+      )}
+      {showSummary && (
+        <SummaryModal
+          summary={summary} 
+          isLoading={summaryLoading}
+          onClose={() => setShowSummary(false)} 
+        />
       )}
     </div>
   );

@@ -1,6 +1,6 @@
 import { useState } from "react";
 
-export default function ChatHeader({ userName, typers, roomId }) {
+export default function ChatHeader({ userName, typers, roomId, onRequestSummary }) {
   const [copied, setCopied] = useState(false);
 
   function copyRoomCode() {
@@ -42,6 +42,16 @@ export default function ChatHeader({ userName, typers, roomId }) {
           </div>
         )}
       </div>
+
+          {/* AI Summary Button */}
+      <button
+        onClick={onRequestSummary}
+        className="px-3 py-1.5 bg-gradient-to-r from-blue-500 to-purple-500 text-white text-sm rounded-lg hover:from-blue-600 hover:to-purple-600 transition-all shadow-md hover:shadow-lg flex items-center gap-2 font-medium"
+        title="Summarize last 50 messages with AI">
+        <span className="text-base">✨</span>
+        <span>AI Summary</span>
+      </button>
+
       <div className="text-sm text-gray-500">
         Signed in as{' '}
         <span className="font-medium text-[#303030] capitalize">
