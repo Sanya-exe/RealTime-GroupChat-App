@@ -4,7 +4,7 @@ import { createServer } from 'node:http';
 import express from 'express';
 import { Server } from "socket.io";
 import { connectDB } from './db.js'; 
-import { summarizeMessages } from './services/aiservice.js';
+import { summarizeMessages } from './services/aiService.js';
 connectDB();
 import Message from './models/message.js';
 
